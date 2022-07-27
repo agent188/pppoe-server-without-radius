@@ -1,0 +1,2 @@
+* * * * * mysql bras -h 127.0.0.1 -u root -p123456 -r -N --batch -e "SELECT user, service, password, ip_static FROM users WHERE active = 1" > /etc/ppp/chap-secrets
+@reboot /sbin/pppoe-server -I ens160 -r -L 10.10.10.1 -p /etc/ppp/ip-pool -x 10

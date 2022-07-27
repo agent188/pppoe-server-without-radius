@@ -1,0 +1,35 @@
+#!/bin/bash
+# This file should not be modified -- make local changes to
+# /etc/ppp/ip-down.local instead
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+. /etc/ppp/auth.sh
+
+LOGDEVICE=$6
+REALDEVICE=$1
+
+rx_bytes=$(mysql $database -r -N --batch -e "SELECT rx_bytes FROM users WHERE interface = '$REALDEVICE'")
+tx_bytes=$(mysql $database -r -N --batch -e "SELECT tx_bytes FROM users WHERE interface = '$REALDEVICE'")
+
+interface=$1
+client_ip=$5
+username=$(mysql $database -r -N --batch -e "SELECT user FROM users WHERE interface = '$interface'")
+mac_address=$(mysql $database -r -N --batch -e "SELECT mac FROM history_auth WHERE interface = '$interface' AND type = 'start' AND user = '$username' ORDER BY time DESC LIMIT 1")
+
+mysql $database -r -N --batch -e "INSERT INTO history_auth (user, type, ip, mac, interface) VALUES ('$username', 'end', '$client_ip', '$mac_address', '$interface')"
+mysql $database -r -N --batch -e "UPDATE users SET interface = NULL, rx_bytes = NULL, tx_bytes = NULL, lastClosedSession = CURRENT_TIMESTAMP(), rx_bps = NULL, tx_bps = NULL WHERE user = '$username'"
+mysql $database -r -N --batch -e "INSERT INTO traffic (user, rx_bytes, tx_bytes) VALUES ('$username', '$rx_bytes', '$tx_bytes')"
+
+ipset del access-pppoe $client_ip
+ipset del pppoe-nat $client_ip
+
+/etc/ppp/ip-down.ipv6to4 ${LOGDEVICE}
+
+[ -x /etc/ppp/ip-down.local ] && /etc/ppp/ip-down.local "$@"
+
+/etc/sysconfig/network-scripts/ifdown-post --realdevice ${REALDEVICE} \
+    ifcfg-${LOGDEVICE}
+
+exit 0

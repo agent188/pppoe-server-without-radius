@@ -1,0 +1,63 @@
+#!/bin/bash
+# This file should not be modified -- make local changes to
+# /etc/ppp/ip-up.local instead
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+. /etc/ppp/auth.sh
+
+LOGDEVICE=$6
+REALDEVICE=$1
+
+[ -f /etc/sysconfig/network-scripts/ifcfg-${LOGDEVICE} ] && /etc/sysconfig/network-scripts/ifup-post --realdevice ${REALDEVICE} ifcfg-${LOGDEVICE}
+
+/etc/ppp/ip-up.ipv6to4 ${LOGDEVICE}
+
+[ -x /etc/ppp/ip-up.local ] && /etc/ppp/ip-up.local "$@"
+
+interface=$1
+client_ip=$5
+username=$(last -w | grep "$interface" | head -n 1 | awk '{print $1}')
+mac_address=$(ps -p $(cat /var/run/$interface.pid) -f | grep -o -E '([[:xdigit:]]{1,2}:){6}[[:xdigit:]]{1,2}' | tail -c 18)
+
+if [[ $(mysql $database -r -N --batch -e "SELECT interface FROM users WHERE user = '$username'") != "NULL" ]]; then
+	sleep 1
+	kill -15 $(cat /var/run/$interface.pid)
+	exit
+fi
+
+if (( $(conntrack -L -s "$client_ip" | wc -l) >= 2500 || $(conntrack -L -d "$client_ip" | wc -l) >= 2500 )); then
+	sleep 1
+        kill -15 $(cat /var/run/$interface.pid)
+        exit
+fi
+
+active=$(mysql $database -r -N --batch -e "SELECT active FROM users WHERE user = '$username'")
+nat=$(mysql $database -r -N --batch -e "SELECT nat FROM users WHERE user = '$username'")
+if [[ $active == 0 ]]; then
+	sleep 1
+	kill -15 $(cat /var/run/$interface.pid)
+	exit 1
+elif [[ $active == 1 ]]; then
+	ipset add access-pppoe $client_ip
+        if [[ $nat == 1 ]]; then
+        	ipset add pppoe-nat $client_ip
+	fi
+else
+	sleep 1
+	kill -15 $(cat /var/run/$interface.pid)
+	exit 1
+fi
+
+ul_shape=$(mysql $database -r -N --batch -e "SELECT ul_shape FROM users WHERE user = '$username'")
+dl_shape=$(mysql $database -r -N --batch -e "SELECT dl_shape FROM users WHERE user = '$username'")
+
+wondershaper $interface $dl_shape $ul_shape
+
+mysql $database -r -N --batch -e "INSERT INTO history_auth (user, type, ip, mac, interface) VALUES ('$username', 'start', '$client_ip', '$mac_address', '$interface')"
+mysql $database -r -N --batch -e "UPDATE users SET interface = '$interface', rx_bytes = 0, tx_bytes = 0, lastCreatedSession = CURRENT_TIMESTAMP(), lastIp = '$client_ip', lastMac = '$mac_address' WHERE user = '$username'"
+
+nohup /etc/ppp/control-pppoe-session-background.sh "$username" "$(cat /var/run/$interface.pid)" "$mac_address" "$interface" > /dev/null & 
+
+exit 0

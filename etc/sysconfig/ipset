@@ -1,0 +1,2 @@
+create access-pppoe hash:ip family inet hashsize 1024 maxelem 10000000
+create pppoe-nat hash:ip family inet hashsize 1024 maxelem 10000000
